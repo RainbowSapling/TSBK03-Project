@@ -21,13 +21,15 @@ void testVertexShader(uint id : SV_VertexID, out float4 position : SV_Position, 
 }
 
 [shader("pixel")]
-void testPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 color : SV_Target)
+void testPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target)
 {
-    color = tex2D(samplerColor, texcoord);
+	// Get original color   
+	float4 color = tex2D(samplerColor, texcoord);
 
-    // Only use red channel
-    color.g = 0.0;
-    color.b = 0.0;
+    // Calculate average
+    float grayscaleAverage = (color.r + color.g + color.b)/3.0f;
+    
+    finalColor = (grayscaleAverage, grayscaleAverage, grayscaleAverage);
 }
 
 
