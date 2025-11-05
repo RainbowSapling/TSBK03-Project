@@ -10,16 +10,13 @@ uniform bool _Grayscale <
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
 sampler2D Downscale { Texture = DownscaleTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
+// Ascii texture
+texture2D AsciiFillTexture < source = "Ascii_fill.png"; > { Width = 80; Height = 8; };
+sampler2D AsciiFill { Texture = AsciiFillTexture; AddressU = REPEAT; AddressV = REPEAT; };
+
 // Default backbuffer
 texture2D texColorBuffer : COLOR;
-sampler2D samplerColor
-{
-    Texture = texColorBuffer;
-
-    AddressU = CLAMP;
-    AddressV = CLAMP;
-    AddressW = CLAMP;
-};
+sampler2D samplerColor { Texture = texColorBuffer; };
 
 
 [shader("vertex")]
@@ -32,20 +29,30 @@ void defaultVertexShader(uint id : SV_VertexID, out float4 position : SV_Positio
 }
 
 [shader("pixel")]
-void testPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
+void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
 	// Get original color   
 	float4 color = tex2D(samplerColor, texcoord);
 
-    if (_Grayscale) {
-        // Calculate average
-        float grayscaleAverage = (color.r + color.g + color.b)/3.0f;
+    // Find grayscale value
+    float luminance = (color.r + color.g + color.b) / 3.0f;
+    
+    int numShades = 10;
+    
+    // Quantize the luminance
+    float quantizedLuminance = floor(luminance * numShades) / numShades;
+       
+    finalColor = (quantizedLuminance, quantizedLuminance, quantizedLuminance);
+    
+    float2 UV;
+    UV.x = (position.x % 8) / 8 + quantizedLuminance;
+    UV.y = (position.y % 8) / 8;
+    
+    float3 ascii = tex2Dfetch(AsciiFill, UV).r;
+    
+    
         
-        finalColor = (grayscaleAverage, grayscaleAverage, grayscaleAverage);
-        }
-    else {
-        finalColor = color;
-        }
+    
 }
 
 [shader("pixel")]
@@ -59,7 +66,7 @@ void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOOR
 [shader("pixel")]
 void viewDownsamplePixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
-	// Get original color   
+	// Get color from texture 
 	float4 color = tex2D(Downscale, texcoord);
 	finalColor = color;
 
@@ -69,11 +76,12 @@ void viewDownsamplePixelShader(float4 position : SV_Position, float2 texcoord : 
 
 technique test < ui_label = "test shader...?"; >
 {
-    pass {      
+	// Quantize the image and render to a smaller texture resulting in downsampling   
+	pass {      
 		RenderTarget = DownscaleTex;		
 
 		VertexShader = defaultVertexShader;
-        PixelShader = testPixelShader;
+        PixelShader = quantizeShader;
     }
 
     
