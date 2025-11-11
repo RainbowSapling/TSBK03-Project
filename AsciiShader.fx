@@ -13,6 +13,11 @@ sampler2D Downscale { Texture = DownscaleTex; MagFilter = POINT; MinFilter = POI
 // Ascii texture
 texture2D AsciiFillTexture < source = "Ascii_fill.png"; > { Width = 80; Height = 8; };
 sampler2D AsciiFill { Texture = AsciiFillTexture; AddressU = REPEAT; AddressV = REPEAT; };
+uniform float2 AsciiFill_TexelSize = (8,8);
+
+texture2D RenderTexture { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D ASCII { Texture = RenderTexture; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; };
+storage2D AsciiStore { Texture = RenderTexture; };
 
 // Default backbuffer
 texture2D texColorBuffer : COLOR;
@@ -28,6 +33,7 @@ void defaultVertexShader(uint id : SV_VertexID, out float4 position : SV_Positio
 
 }
 
+// Quantization
 [shader("pixel")]
 void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
@@ -43,17 +49,32 @@ void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, 
     float quantizedLuminance = floor(luminance * numShades) / numShades;
        
     finalColor = (quantizedLuminance, quantizedLuminance, quantizedLuminance);
-    
-    float2 UV;
-    UV.x = (position.x % 8) / 8 + quantizedLuminance;
-    UV.y = (position.y % 8) / 8;
-    
-    float3 ascii = tex2Dfetch(AsciiFill, UV).r;
-    
-    
-        
-    
+   
 }
+
+// Convert to ascii
+void asciiShader(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
+{
+
+	float3 ascii = 0;
+	
+	uint2 downscaleID = tid.xy / 8;
+	float4 downscaleInfo = tex2Dfetch(Downscale, downscaleID);
+	
+	float luminance = saturate(downscaleInfo.w);
+	luminance = max(0, (floor(luminance * 10) - 1)) / 10.0f;
+	
+	float2 localUV;
+    localUV.x = (((tid.x % 8)) + (luminance) * 80);
+    localUV.y = (tid.y % 8);
+
+    ascii = tex2Dfetch(AsciiFill, localUV).r;
+    
+    tex2Dstore(AsciiStore, tid.xy, float4(ascii, 1.0));
+
+}
+
+float4 PS_EndPass(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { return tex2D(ASCII, uv).rgba; }
 
 [shader("pixel")]
 void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
@@ -84,12 +105,21 @@ technique test < ui_label = "test shader...?"; >
         PixelShader = quantizeShader;
     }
 
+	pass {
+		VertexShader = defaultVertexShader;
+        PixelShader = viewDownsamplePixelShader;
+	}
     
     pass {
-        VertexShader = defaultVertexShader;
-        PixelShader = viewDownsamplePixelShader;
+        ComputeShader = asciiShader<8, 8>;
+        DispatchSizeX = BUFFER_WIDTH / 8;
+        DispatchSizeY = BUFFER_HEIGHT / 8;
     }
-
+    
+    pass {
+    	VertexShader = defaultVertexShader;
+    	PixelShader = PS_EndPass;
+    }
     
     
 }
