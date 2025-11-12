@@ -5,6 +5,13 @@ uniform bool _Grayscale <
     ui_label = "Grayscale";
 > = false;
 
+uniform float _Brightness <
+	ui_label = "Brightness";
+	ui_min = 0.0f;
+	ui_max = 10.0f;
+	ui_type = "drag";
+> = 1.0f;
+
 
 // Texture for drawing the downsampled image to
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
@@ -13,7 +20,6 @@ sampler2D Downscale { Texture = DownscaleTex; MagFilter = POINT; MinFilter = POI
 // Ascii texture
 texture2D AsciiFillTexture < source = "Ascii_fill.png"; > { Width = 80; Height = 8; };
 sampler2D AsciiFill { Texture = AsciiFillTexture; AddressU = REPEAT; AddressV = REPEAT; };
-uniform float2 AsciiFill_TexelSize = (8,8);
 
 texture2D RenderTexture { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D ASCII { Texture = RenderTexture; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; };
@@ -39,16 +45,33 @@ void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, 
 {
 	// Get original color   
 	float4 color = tex2D(samplerColor, texcoord);
-
-    // Find grayscale value
-    float luminance = (color.r + color.g + color.b) / 3.0f;
+	
+	color *= _Brightness;
+	
+	if (_Grayscale) {
+		// Find grayscale value
+    	float luminance = (color.r + color.g + color.b) / 3.0f;
     
-    int numShades = 10;
+    	int numShades = 10;
     
-    // Quantize the luminance
-    float quantizedLuminance = floor(luminance * numShades) / numShades;
+    	// Quantize the luminance
+    	float quantizedLuminance = floor(luminance * numShades) / numShades;
+    	
+    	finalColor = (quantizedLuminance, quantizedLuminance, quantizedLuminance);
+	}
+    
+	else {
+		// Number of colors per channel
+		float3 colorResolution = (8.0, 8.0, 8.0);
+    
+    	// Quantize colors
+   	 float3 quantizedColor = floor(color.rgb * colorResolution) / (colorResolution - 1);
        
-    finalColor = (quantizedLuminance, quantizedLuminance, quantizedLuminance);
+    	finalColor = quantizedColor;
+
+	} 
+    
+    
    
 }
 
@@ -74,7 +97,22 @@ void asciiShader(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 
 }
 
-float4 PS_EndPass(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { return tex2D(ASCII, uv).rgba; }
+float4 PS_EndPass(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { 
+
+	float4 ascii = tex2D(ASCII, uv).rgba;
+	
+	float4 color = tex2D(samplerColor, uv);
+	
+	int numShades = 10;
+	
+	float4 quantizedColor = floor(color * numShades) / numShades;
+	
+	ascii *= quantizedColor;
+	
+
+	return ascii; 
+	
+}
 
 [shader("pixel")]
 void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
