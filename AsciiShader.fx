@@ -5,12 +5,28 @@ uniform bool _Grayscale <
     ui_label = "Grayscale";
 > = false;
 
+// Toggle for color palette 1
+uniform bool _Palette1 <
+    ui_category = "Effects";
+    ui_label = "Color Palette 1";
+> = false;
+
 uniform float _Brightness <
 	ui_label = "Brightness";
 	ui_min = 0.0f;
 	ui_max = 10.0f;
 	ui_type = "drag";
 > = 1.0f;
+
+uniform float4 _Color1 <
+	ui_label = "Color1";
+	ui_type = "color";
+> = (0.0, 0.0, 0.0, 1.0);
+
+uniform float4 _Color2 <
+	ui_label = "Color2";
+	ui_type = "color";
+> = (0.0, 0.0, 0.0, 1.0);
 
 
 // Texture for drawing the downsampled image to
@@ -48,35 +64,18 @@ void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, 
 	
 	color *= _Brightness;
 	
-	if (_Grayscale) {
-		// Find grayscale value
-    	float luminance = (color.r + color.g + color.b) / 3.0f;
+	// Number of colors per channel
+	float3 colorResolution = (8.0, 8.0, 8.0);
     
-    	int numShades = 10;
-    
-    	// Quantize the luminance
-    	float quantizedLuminance = floor(luminance * numShades) / numShades;
-    	
-    	finalColor = (quantizedLuminance, quantizedLuminance, quantizedLuminance);
-	}
-    
-	else {
-		// Number of colors per channel
-		float3 colorResolution = (8.0, 8.0, 8.0);
-    
-    	// Quantize colors
-   	 float3 quantizedColor = floor(color.rgb * colorResolution) / (colorResolution - 1);
+    // Quantize colors
+	float3 quantizedColor = floor(color.rgb * colorResolution) / (colorResolution - 1);
        
-    	finalColor = quantizedColor;
-
-	} 
-    
-    
+    finalColor = quantizedColor;  
    
 }
 
 // Convert to ascii
-void asciiShader(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
+void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 {
 
 	float3 ascii = 0;
@@ -97,20 +96,66 @@ void asciiShader(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 
 }
 
-float4 PS_EndPass(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { 
+float4 printAscii(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { 
 
-	float4 ascii = tex2D(ASCII, uv).rgba;
+	return tex2D(ASCII, uv).rgba;
 	
-	float4 color = tex2D(samplerColor, uv);
+}
+
+float4 colorShader(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0)  : SV_TARGET { 	
+
+	float4 ascii = tex2D(ASCII, texcoord).rgba;
+
+	float4 color = tex2D(Downscale, texcoord);
 	
 	int numShades = 10;
 	
-	float4 quantizedColor = floor(color * numShades) / numShades;
+	// Grayscale effect
+	if (_Grayscale) {
+		// Find grayscale value
+    	float luminance = (color.r + color.g + color.b) / 3.0f;
+    
+    	// Quantize the luminance
+    	float quantizedLuminance = floor(luminance * numShades) / numShades;
+    	
+    	return ascii * quantizedLuminance;
+	}
 	
-	ascii *= quantizedColor;
-	
+	// Color palette 1
+	else if (_Palette1) {
+		float luminance = (color.r + color.g + color.b) / 3.0f;
+    	float quantizedLuminance = floor(luminance * numShades) / numShades;		
 
-	return ascii; 
+		float4 color1 = float4(0.718, 0.035, 0.298, 1.0);
+		float4 color2 = float4(0.627, 0.102, 0.345, 1.0);
+		float4 color3 = float4(0.537, 0.169, 0.392, 1.0);
+		float4 color4 = float4(0.447, 0.235, 0.439, 1.0);
+		float4 color5 = float4(0.361, 0.302, 0.49, 1.0);
+		float4 color6 = float4(0.271, 0.369, 0.537, 1.0);
+		float4 color7 = float4(0.18, 0.435, 0.584, 1.0);
+		float4 color8 = float4(0.09, 0.502, 0.631, 1.0);
+		float4 color9 = float4(0, 0.569, 0.678, 1.0);
+		
+		float4 outColor;
+
+		
+		if (quantizedLuminance < 0.2) {outColor = color1 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.3) {outColor = color2 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.4) {outColor = color3 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.5) {outColor = color4 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.6) {outColor = color5 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.7) {outColor = color6 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.8) {outColor = color7 * quantizedLuminance;}
+		else if (quantizedLuminance < 0.9) {outColor = color8 * quantizedLuminance;}
+		else {outColor = color9 * quantizedLuminance;}
+		
+		return ascii * outColor;
+	}
+	
+	// If none of the color effects are toggled: use quabntized colors
+	float4 quantizedColor = floor(color * numShades) / numShades;
+
+	return ascii * quantizedColor;
 	
 }
 
@@ -149,14 +194,19 @@ technique test < ui_label = "test shader...?"; >
 	}
     
     pass {
-        ComputeShader = asciiShader<8, 8>;
+        ComputeShader = convertAscii<8, 8>;
         DispatchSizeX = BUFFER_WIDTH / 8;
         DispatchSizeY = BUFFER_HEIGHT / 8;
     }
     
     pass {
     	VertexShader = defaultVertexShader;
-    	PixelShader = PS_EndPass;
+    	PixelShader = printAscii;
+    }
+    
+    pass {
+    	VertexShader = defaultVertexShader;
+    	PixelShader = colorShader;
     }
     
     
