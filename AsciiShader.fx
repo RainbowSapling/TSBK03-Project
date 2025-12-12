@@ -36,17 +36,35 @@ uniform float _Brightness <
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
 sampler2D Downscale { Texture = DownscaleTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
-// Ascii texture
+// Ascii fill texture
 texture2D AsciiFillTexture < source = "Ascii_fill.png"; > { Width = 80; Height = 8; };
 sampler2D AsciiFill { Texture = AsciiFillTexture; AddressU = REPEAT; AddressV = REPEAT; };
 
+// Ascii edge texture
+texture2D AsciiEdgeTexture < source = "Ascii_edge.png"; > { Width = 40; Height = 8; };
+sampler2D AsciiEdge { Texture = AsciiEdgeTexture; AddressU = REPEAT; AddressV = REPEAT; };
+
+// Ascii rendering
 texture2D RenderTexture { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D ASCII { Texture = RenderTexture; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; };
 storage2D AsciiStore { Texture = RenderTexture; };
 
+// Sobel horizontal
+texture2D SobelTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D Sobel { Texture = SobelTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
+
+// Gauss horizontal
+texture2D GaussHorizontalTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D GaussHorizontal { Texture = GaussHorizontalTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
+
 // Default backbuffer
 texture2D texColorBuffer : COLOR;
 sampler2D samplerColor { Texture = texColorBuffer; };
+
+
+float gaussianFilter(float sigma, float x) {
+	return (1.0 / (sigma * sqrt(2.0*3.14)) * exp(-(x*x)/(2.0*sigma*sigma)));
+}
 
 
 [shader("vertex")]
@@ -76,9 +94,85 @@ void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, 
     finalColor = quantizedColor;  
 }
 
+float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
+	float2 texelSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+	
+	float2 blur = 0;
+	float2 kernelSum = 0;
+	
+	int kernelSize = 2;
+	float sigma = 2.0;
+	
+	for(int x = - kernelSize; x <= kernelSize; x++){
+		float2 color = tex2D(samplerColor, texcoord + float2(x,0) * texelSize).r;
+		float2 gauss = float2(gaussianFilter(sigma,x),gaussianFilter(sigma,x));
+		blur += color * gauss;
+		kernelSum += gauss;
+	}
+	
+	blur /= kernelSum;
+	
+	return float4(blur, 0, 0);
+}
+
+
+float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) : SV_Target {
+	
+	float2 delta = float2(0.01, 0.01);
+
+	float Gx;
+	float Gy;
+
+	Gx += tex2D(Downscale, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
+	Gx += tex2D(Downscale, (texcoord + float2(0.0, -1.0) * delta)).r * 0.0;
+	Gx += tex2D(Downscale, (texcoord + float2(1.0, -1.0) * delta)).r * 1.0;
+	Gx += tex2D(Downscale, (texcoord + float2(-1.0, 0.0) * delta)).r * -2.0;
+	Gx += tex2D(Downscale, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
+	Gx += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
+	Gx += tex2D(Downscale, (texcoord + float2(-1.0, 1.0) * delta)).r * -1.0;
+	Gx += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
+	Gx += tex2D(Downscale, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
+	
+	Gy += tex2D(Downscale, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
+	Gy += tex2D(Downscale, (texcoord + float2(0.0, -1.0) * delta)).r * -2.0;
+	Gy += tex2D(Downscale, (texcoord + float2(1.0, -1.0) * delta)).r * -1.0;
+	Gy += tex2D(Downscale, (texcoord + float2(-1.0, 0.0) * delta)).r * 0.0;
+	Gy += tex2D(Downscale, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
+	Gy += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
+	Gy += tex2D(Downscale, (texcoord + float2(-1.0, 1.0) * delta)).r * 1.0;
+	Gy += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
+	Gy += tex2D(Downscale, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
+	
+	
+	float2 G = float2(Gx, Gy);
+	G = normalize(G);
+	
+	float theta = atan2(G.y, G.x);
+	
+	return float2(theta, 1 - isnan(theta));
+}
+
+
 // Convert to ascii
 void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 {
+
+	float2 sobel = tex2Dfetch(Sobel, tid.xy).rg;
+
+    float theta = sobel.r;
+    float absTheta = abs(theta) / 3.14;
+
+    int direction = -1;
+
+    if (any(sobel.g)) {
+        if ((0.0f <= absTheta) && (absTheta < 0.05f)) direction = 0; // VERTICAL
+        else if ((0.9f < absTheta) && (absTheta <= 1.0f)) direction = 0;
+        else if ((0.45f < absTheta) && (absTheta < 0.55f)) direction = 1; // HORIZONTAL
+        else if (0.05f < absTheta && absTheta < 0.45f) direction = sign(theta) > 0 ? 3 : 2; // DIAGONAL 1
+        else if (0.55f < absTheta && absTheta < 0.9f) direction = sign(theta) > 0 ? 2 : 3; // DIAGONAL 2
+    }	
+    
+    float4 quantizedEdge = (direction + 1) * 8;
 
 	float3 ascii = 0;
 	
@@ -89,10 +183,28 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 	luminance = max(0, (floor(luminance * 10) - 1)) / 10.0f;
 	
 	float2 localUV;
-    localUV.x = (((tid.x % 8)) + (luminance) * 80);
-    localUV.y = (tid.y % 8);
+	
+	/*if (saturate(direction + 1)) {
+		// Edges
+		localUV.x = ((tid.x % 8)) + quantizedEdge.x;
+		localUV.y = 8 - (tid.y % 8);
+	
+		ascii = tex2Dfetch(AsciiEdge, localUV).r;
+	}
+	else {
+		// Fill
+    	localUV.x = (((tid.x % 8)) + (luminance) * 80);
+    	localUV.y = (tid.y % 8);
 
-    ascii = tex2Dfetch(AsciiFill, localUV).r;
+    	ascii = tex2Dfetch(AsciiFill, localUV).r;
+	}*/
+	
+	localUV.x = ((tid.x % 8)) + quantizedEdge.x;
+	localUV.y = 8 - (tid.y % 8);
+	
+	ascii = tex2Dfetch(AsciiEdge, localUV).r;
+    
+    
     tex2Dstore(AsciiStore, tid.xy, float4(ascii, 1.0));
 }
 
@@ -200,6 +312,12 @@ void viewDownsamplePixelShader(float4 position : SV_Position, float2 texcoord : 
 	finalColor = color;
 }
 
+[shader("pixel")]
+void viewSobel(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
+{
+	finalColor = tex2D(Sobel, texcoord);
+}
+
 
 
 technique test < ui_label = "test shader...?"; >
@@ -216,7 +334,26 @@ technique test < ui_label = "test shader...?"; >
 		VertexShader = defaultVertexShader;
         PixelShader = viewDownsamplePixelShader;
 	}
-    
+	
+	pass {
+		RenderTarget = GaussHorizontalTex;
+		
+		VertexShader = defaultVertexShader;
+		PixelShader = horizontalGaussianShader;
+	}
+	
+	pass {
+		RenderTarget = SobelTex;
+		
+		VertexShader = defaultVertexShader;
+		PixelShader = sobelShader;
+	}
+	
+	pass {
+		VertexShader = defaultVertexShader;
+		PixelShader = viewSobel;
+	}
+    /*
     pass {
         ComputeShader = convertAscii<8, 8>;
         DispatchSizeX = BUFFER_WIDTH / 8;
@@ -231,7 +368,7 @@ technique test < ui_label = "test shader...?"; >
     pass {
     	VertexShader = defaultVertexShader;
     	PixelShader = colorShader;
-    }
+    }*/
     
     
 }
