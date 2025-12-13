@@ -31,6 +31,13 @@ uniform float _Brightness <
 	ui_type = "drag";
 > = 1.0f;
 
+uniform float _EdgeScaling <
+	ui_label = "Edge Scaling";
+	ui_min = 0.0f;
+	ui_max = 5.0f;
+	ui_type = "drag";
+> = 1.6f;
+
 
 // Texture for drawing the downsampled image to
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
@@ -49,13 +56,18 @@ texture2D RenderTexture { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format =
 sampler2D ASCII { Texture = RenderTexture; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT; };
 storage2D AsciiStore { Texture = RenderTexture; };
 
-// Sobel horizontal
+// Sobel filter
 texture2D SobelTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D Sobel { Texture = SobelTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
+
 
 // Gauss horizontal
 texture2D GaussHorizontalTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D GaussHorizontal { Texture = GaussHorizontalTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
+
+// Gauss vertical + difference of gaussians
+texture2D DiffGaussTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D DiffGauss { Texture = DiffGaussTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
 // Default backbuffer
 texture2D texColorBuffer : COLOR;
@@ -103,9 +115,9 @@ float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord :
 	int kernelSize = 2;
 	float sigma = 2.0;
 	
-	for(int x = - kernelSize; x <= kernelSize; x++){
-		float2 color = tex2D(samplerColor, texcoord + float2(x,0) * texelSize).r;
-		float2 gauss = float2(gaussianFilter(sigma,x),gaussianFilter(sigma,x));
+	for(int x = -kernelSize; x <= kernelSize; x++){
+		float2 color = tex2D(Downscale, texcoord + float2(x,0) * texelSize).r;
+		float2 gauss = float2(gaussianFilter(sigma,x),gaussianFilter(sigma*_EdgeScaling,x));
 		blur += color * gauss;
 		kernelSum += gauss;
 	}
@@ -115,33 +127,60 @@ float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord :
 	return float4(blur, 0, 0);
 }
 
+float differenceGaussianShader(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
+	float2 texelSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+	
+	float2 blur = 0;
+	float2 kernelSum = 0;
+	
+	int kernelSize = 2;
+	float sigma = 2.0;
+	
+	for(int y = -kernelSize; y <= kernelSize; y++){
+		float2 color = tex2D(GaussHorizontal, texcoord + float2(0,y) * texelSize).rg;
+		float2 gauss = float2(gaussianFilter(sigma,y),gaussianFilter(sigma*_EdgeScaling,y));
+		blur += color * gauss;
+		kernelSum += gauss;
+	}
+	
+	blur /= kernelSum;
+	
+	float diff = blur.x - blur.y;
+	float threshold = 0.005;
+	
+	if (diff >= threshold) {diff = 1.0;}
+	else {diff = 0.0;}
+	
+	return diff;
+}
+
 
 float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) : SV_Target {
 	
-	float2 delta = float2(0.01, 0.01);
+	float2 delta = float2(0.001, 0.001);
 
 	float Gx;
 	float Gy;
 
-	Gx += tex2D(Downscale, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
-	Gx += tex2D(Downscale, (texcoord + float2(0.0, -1.0) * delta)).r * 0.0;
-	Gx += tex2D(Downscale, (texcoord + float2(1.0, -1.0) * delta)).r * 1.0;
-	Gx += tex2D(Downscale, (texcoord + float2(-1.0, 0.0) * delta)).r * -2.0;
-	Gx += tex2D(Downscale, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
-	Gx += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
-	Gx += tex2D(Downscale, (texcoord + float2(-1.0, 1.0) * delta)).r * -1.0;
-	Gx += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
-	Gx += tex2D(Downscale, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, -1.0) * delta)).r * 0.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(1.0, -1.0) * delta)).r * 1.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(-1.0, 0.0) * delta)).r * -2.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(-1.0, 1.0) * delta)).r * -1.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
+	Gx += tex2D(DiffGauss, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
 	
-	Gy += tex2D(Downscale, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
-	Gy += tex2D(Downscale, (texcoord + float2(0.0, -1.0) * delta)).r * -2.0;
-	Gy += tex2D(Downscale, (texcoord + float2(1.0, -1.0) * delta)).r * -1.0;
-	Gy += tex2D(Downscale, (texcoord + float2(-1.0, 0.0) * delta)).r * 0.0;
-	Gy += tex2D(Downscale, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
-	Gy += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
-	Gy += tex2D(Downscale, (texcoord + float2(-1.0, 1.0) * delta)).r * 1.0;
-	Gy += tex2D(Downscale, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
-	Gy += tex2D(Downscale, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(0.0, -1.0) * delta)).r * -2.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(1.0, -1.0) * delta)).r * -1.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(-1.0, 0.0) * delta)).r * 0.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(0.0, 0.0) * delta)).r * 0.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(-1.0, 1.0) * delta)).r * 1.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(0.0, 1.0) * delta)).r * 2.0;
+	Gy += tex2D(DiffGauss, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
 	
 	
 	float2 G = float2(Gx, Gy);
@@ -152,7 +191,7 @@ float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) :
 	return float2(theta, 1 - isnan(theta));
 }
 
-
+groupshared int edgeCount[64];
 // Convert to ascii
 void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 {
@@ -164,7 +203,7 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 
     int direction = -1;
 
-    if (any(sobel.g)) {
+    if (any(sobel.r)) {
         if ((0.0f <= absTheta) && (absTheta < 0.05f)) direction = 0; // VERTICAL
         else if ((0.9f < absTheta) && (absTheta <= 1.0f)) direction = 0;
         else if ((0.45f < absTheta) && (absTheta < 0.55f)) direction = 1; // HORIZONTAL
@@ -172,7 +211,44 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
         else if (0.55f < absTheta && absTheta < 0.9f) direction = sign(theta) > 0 ? 2 : 3; // DIAGONAL 2
     }	
     
-    float4 quantizedEdge = (direction + 1) * 8;
+    
+    // Set group thread bucket to direction
+    edgeCount[gid.x + gid.y * 8] = direction;
+
+    barrier();
+
+    int commonEdgeIndex = -1;
+    if ((gid.x == 0) && (gid.y == 0)) {
+        uint buckets[4] = {0, 0, 0, 0};
+
+        // Count up directions in tile
+        for (int i = 0; i < 64; ++i) {
+            buckets[edgeCount[i]] += 1;
+        }
+
+        uint maxValue = 0;
+
+        // Scan for most common edge direction (max)
+        for (int j = 0; j < 4; ++j) {
+            if (buckets[j] > maxValue) {
+                commonEdgeIndex = j;
+                maxValue = buckets[j];
+            }
+        }
+		
+		int edgeThreshold = 8;
+		
+        // Discard edge info if not enough edge pixels in tile
+        if (maxValue < edgeThreshold) commonEdgeIndex = -1;
+
+        edgeCount[0] = commonEdgeIndex;
+    }
+
+    barrier();
+    
+    
+    
+    float4 quantizedEdge = (edgeCount[0] + 1) * 8;
 
 	float3 ascii = 0;
 	
@@ -184,7 +260,7 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 	
 	float2 localUV;
 	
-	/*if (saturate(direction + 1)) {
+	if (saturate(edgeCount[0] + 1)) {
 		// Edges
 		localUV.x = ((tid.x % 8)) + quantizedEdge.x;
 		localUV.y = 8 - (tid.y % 8);
@@ -197,12 +273,7 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
     	localUV.y = (tid.y % 8);
 
     	ascii = tex2Dfetch(AsciiFill, localUV).r;
-	}*/
-	
-	localUV.x = ((tid.x % 8)) + quantizedEdge.x;
-	localUV.y = 8 - (tid.y % 8);
-	
-	ascii = tex2Dfetch(AsciiEdge, localUV).r;
+	}
     
     
     tex2Dstore(AsciiStore, tid.xy, float4(ascii, 1.0));
@@ -343,17 +414,24 @@ technique test < ui_label = "test shader...?"; >
 	}
 	
 	pass {
+		RenderTarget = DiffGaussTex;
+		
+		VertexShader = defaultVertexShader;
+		PixelShader = differenceGaussianShader;
+	}
+	
+	pass {
 		RenderTarget = SobelTex;
 		
 		VertexShader = defaultVertexShader;
 		PixelShader = sobelShader;
 	}
 	
-	pass {
+	/*pass {
 		VertexShader = defaultVertexShader;
 		PixelShader = viewSobel;
-	}
-    /*
+	}*/
+    
     pass {
         ComputeShader = convertAscii<8, 8>;
         DispatchSizeX = BUFFER_WIDTH / 8;
@@ -368,7 +446,7 @@ technique test < ui_label = "test shader...?"; >
     pass {
     	VertexShader = defaultVertexShader;
     	PixelShader = colorShader;
-    }*/
+    }
     
     
 }
