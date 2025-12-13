@@ -1,43 +1,78 @@
 
 // Toggle for grayscale effect
 uniform bool _Grayscale <
-    ui_category = "Effects";
+    ui_category = "Colors";
     ui_label = "Grayscale";
 > = false;
 
 // Toggle for color palette 1
 uniform bool _Palette1 <
-    ui_category = "Effects";
+    ui_category = "Colors";
     ui_label = "Color Palette 1";
 > = false;
 
 // Toggle for color palette 2
 uniform bool _Palette2 <
-    ui_category = "Effects";
+    ui_category = "Colors";
     ui_label = "Color Palette 2";
 > = false;
 
 // Toggle for color palette 3
 uniform bool _Palette3 <
-    ui_category = "Effects";
+    ui_category = "Colors";
     ui_label = "Color Palette 3";
 > = false;
 
-
+// Adjust Brightness
 uniform float _Brightness <
+	ui_category = "Parameters";
 	ui_label = "Brightness";
 	ui_min = 0.0f;
 	ui_max = 10.0f;
 	ui_type = "drag";
 > = 1.0f;
 
+// Adjust the scaling for edge detection
 uniform float _EdgeScaling <
+	ui_category = "Parameters";
 	ui_label = "Edge Scaling";
 	ui_min = 0.0f;
 	ui_max = 5.0f;
 	ui_type = "drag";
 > = 1.6f;
 
+uniform bool _ShowDownscale <
+    ui_category = "Shader Progress";
+    ui_label = "Show Downscale";
+> = false;
+
+uniform bool _ShowDoG <
+    ui_category = "Shader Progress";
+    ui_label = "Show DoG";
+> = false;
+
+uniform bool _ShowSobel <
+    ui_category = "Shader Progress";
+    ui_label = "Show Sobel";
+> = false;
+
+uniform bool _ShowSplitView <
+    ui_category = "Shader Progress";
+    ui_label = "Show Split View";
+> = false;
+
+// Adjust Brightness
+uniform float _SplitViewAmount <
+	ui_category = "Shader Progress";
+	ui_label = "Split View Amount";
+	ui_min = 0.0f;
+	ui_max = 1.0f;
+	ui_type = "drag";
+> = 0.5f;
+
+// Store final result
+texture2D OriginalTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D Original { Texture = OriginalTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
 // Texture for drawing the downsampled image to
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
@@ -60,7 +95,6 @@ storage2D AsciiStore { Texture = RenderTexture; };
 texture2D SobelTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D Sobel { Texture = SobelTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
-
 // Gauss horizontal
 texture2D GaussHorizontalTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D GaussHorizontal { Texture = GaussHorizontalTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
@@ -68,6 +102,10 @@ sampler2D GaussHorizontal { Texture = GaussHorizontalTex; MagFilter = POINT; Min
 // Gauss vertical + difference of gaussians
 texture2D DiffGaussTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D DiffGauss { Texture = DiffGaussTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
+
+// Store final result
+texture2D ResultTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler2D Result { Texture = ResultTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
 // Default backbuffer
 texture2D texColorBuffer : COLOR;
@@ -204,11 +242,11 @@ void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
     int direction = -1;
 
     if (any(sobel.r)) {
-        if ((0.0f <= absTheta) && (absTheta < 0.05f)) direction = 0; // VERTICAL
-        else if ((0.9f < absTheta) && (absTheta <= 1.0f)) direction = 0;
-        else if ((0.45f < absTheta) && (absTheta < 0.55f)) direction = 1; // HORIZONTAL
-        else if (0.05f < absTheta && absTheta < 0.45f) direction = sign(theta) > 0 ? 3 : 2; // DIAGONAL 1
-        else if (0.55f < absTheta && absTheta < 0.9f) direction = sign(theta) > 0 ? 2 : 3; // DIAGONAL 2
+        if (0.0f <= absTheta && absTheta < 0.1f) direction = 1; // VERTICAL
+        else if (0.9f < absTheta && absTheta <= 1.0f) direction = 1;
+        else if (0.4f <= absTheta && absTheta <= 0.6f) direction = 0; // HORIZONTAL
+        else if (0.1f < absTheta && absTheta < 0.4f) direction = sign(theta) > 0 ? 3 : 2; // DIAGONAL 1
+        else if (0.6f < absTheta && absTheta < 0.9f) direction = sign(theta) > 0 ? 2 : 3; // DIAGONAL 2
     }	
     
     
@@ -371,28 +409,34 @@ float4 colorShader(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0)  
 void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
 	// Get original color   
-	float4 color = tex2D(samplerColor, texcoord);
-	
+	finalColor = tex2D(samplerColor, texcoord);	
 }
 
 [shader("pixel")]
-void viewDownsamplePixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
+void viewProgress(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
-	// Get color from texture 
-	float4 color = tex2D(Downscale, texcoord);
-	finalColor = color;
+	if (_ShowDownscale) {finalColor = tex2D(Downscale, texcoord);}
+	else if (_ShowDoG) {finalColor = tex2D(DiffGauss, texcoord);}
+	else if (_ShowSobel) {finalColor = tex2D(Sobel, texcoord);}
+	else if (_ShowSplitView) {
+		float4 res = tex2D(Result, texcoord);
+		float4 org = tex2D(Original, texcoord);
+		if (texcoord.x <= _SplitViewAmount) {finalColor = res;}
+		else {finalColor = org;}
+	}
+	else {finalColor = tex2D(Result, texcoord);}
 }
-
-[shader("pixel")]
-void viewSobel(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
-{
-	finalColor = tex2D(Sobel, texcoord);
-}
-
 
 
 technique test < ui_label = "test shader...?"; >
 {
+	pass {
+		RenderTarget = OriginalTex;
+		
+		VertexShader = defaultVertexShader;
+        PixelShader = defaultPixelShader;
+	}	
+
 	// Quantize the image and render to a smaller texture resulting in downsampling   
 	pass {      
 		RenderTarget = DownscaleTex;		
@@ -400,11 +444,6 @@ technique test < ui_label = "test shader...?"; >
 		VertexShader = defaultVertexShader;
         PixelShader = quantizeShader;
     }
-
-	pass {
-		VertexShader = defaultVertexShader;
-        PixelShader = viewDownsamplePixelShader;
-	}
 	
 	pass {
 		RenderTarget = GaussHorizontalTex;
@@ -426,11 +465,6 @@ technique test < ui_label = "test shader...?"; >
 		VertexShader = defaultVertexShader;
 		PixelShader = sobelShader;
 	}
-	
-	/*pass {
-		VertexShader = defaultVertexShader;
-		PixelShader = viewSobel;
-	}*/
     
     pass {
         ComputeShader = convertAscii<8, 8>;
@@ -444,9 +478,16 @@ technique test < ui_label = "test shader...?"; >
     }
     
     pass {
-    	VertexShader = defaultVertexShader;
+		RenderTarget = ResultTex;    	
+
+		VertexShader = defaultVertexShader;
     	PixelShader = colorShader;
     }
+    
+    pass {
+		VertexShader = defaultVertexShader;
+		PixelShader = viewProgress;
+	}
     
     
 }
