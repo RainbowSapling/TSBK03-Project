@@ -41,27 +41,31 @@ uniform float _EdgeScaling <
 	ui_type = "drag";
 > = 1.6f;
 
+// Toggle for showing downscaled image
 uniform bool _ShowDownscale <
     ui_category = "Shader Progress";
     ui_label = "Show Downscale";
 > = false;
 
+// Toggle for showing the difference of gaussians
 uniform bool _ShowDoG <
     ui_category = "Shader Progress";
     ui_label = "Show DoG";
 > = false;
 
+// Toggle for showing the image with the sobel filter applied
 uniform bool _ShowSobel <
     ui_category = "Shader Progress";
     ui_label = "Show Sobel";
 > = false;
 
+// Toggle for showing a split view of the image before and after the shader
 uniform bool _ShowSplitView <
     ui_category = "Shader Progress";
     ui_label = "Show Split View";
 > = false;
 
-// Adjust Brightness
+// Adjust split view center point
 uniform float _SplitViewAmount <
 	ui_category = "Shader Progress";
 	ui_label = "Split View Amount";
@@ -70,7 +74,7 @@ uniform float _SplitViewAmount <
 	ui_type = "drag";
 > = 0.5f;
 
-// Store final result
+// Store original image
 texture2D OriginalTex { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
 sampler2D Original { Texture = OriginalTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
@@ -78,11 +82,11 @@ sampler2D Original { Texture = OriginalTex; MagFilter = POINT; MinFilter = POINT
 texture2D DownscaleTex { Width = BUFFER_WIDTH / 8; Height = BUFFER_HEIGHT / 8; Format = RGBA16F; };
 sampler2D Downscale { Texture = DownscaleTex; MagFilter = POINT; MinFilter = POINT; MipFilter = POINT;};
 
-// Ascii fill texture
+// Ascii fill texture import
 texture2D AsciiFillTexture < source = "Ascii_fill.png"; > { Width = 80; Height = 8; };
 sampler2D AsciiFill { Texture = AsciiFillTexture; AddressU = REPEAT; AddressV = REPEAT; };
 
-// Ascii edge texture
+// Ascii edge texture import
 texture2D AsciiEdgeTexture < source = "Ascii_edge.png"; > { Width = 40; Height = 8; };
 sampler2D AsciiEdge { Texture = AsciiEdgeTexture; AddressU = REPEAT; AddressV = REPEAT; };
 
@@ -112,11 +116,12 @@ texture2D texColorBuffer : COLOR;
 sampler2D samplerColor { Texture = texColorBuffer; };
 
 
+// Function applying a Gaussian filter
 float gaussianFilter(float sigma, float x) {
 	return (1.0 / (sigma * sqrt(2.0*3.14)) * exp(-(x*x)/(2.0*sigma*sigma)));
 }
 
-
+// Default vertex shader (used for all passes)
 [shader("vertex")]
 void defaultVertexShader(uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD0)
 {
@@ -126,13 +131,22 @@ void defaultVertexShader(uint id : SV_VertexID, out float4 position : SV_Positio
 
 }
 
-// Quantization
+// Default pixel shader (doesn't affect the image)
+[shader("pixel")]
+void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
+{
+	// Get color from backbuffer
+	finalColor = tex2D(samplerColor, texcoord);	
+}
+
+// Color Quantization
 [shader("pixel")]
 void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
 	// Get original color   
 	float4 color = tex2D(samplerColor, texcoord);
 	
+	// Adjust brightness of image from the menu slider
 	color *= _Brightness;
 	
 	// Number of colors per channel
@@ -144,7 +158,9 @@ void quantizeShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, 
     finalColor = quantizedColor;  
 }
 
+// Horizontal Gaussian filter
 float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
+	// Define texel size (BUFFER_RCP_WIDTH = 1 / BUFFER_WIDTH)
 	float2 texelSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 	
 	float2 blur = 0;
@@ -154,6 +170,7 @@ float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord :
 	float sigma = 2.0;
 	
 	for(int x = -kernelSize; x <= kernelSize; x++){
+		// Get pixel color from downscaled image
 		float2 color = tex2D(Downscale, texcoord + float2(x,0) * texelSize).r;
 		float2 gauss = float2(gaussianFilter(sigma,x),gaussianFilter(sigma*_EdgeScaling,x));
 		blur += color * gauss;
@@ -165,6 +182,7 @@ float4 horizontalGaussianShader(float4 position : SV_Position, float2 texcoord :
 	return float4(blur, 0, 0);
 }
 
+// Vertical gaussian and Difference of Gaussians
 float differenceGaussianShader(float4 position : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
 	float2 texelSize = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
 	
@@ -183,16 +201,18 @@ float differenceGaussianShader(float4 position : SV_Position, float2 texcoord : 
 	
 	blur /= kernelSum;
 	
+	// Difference of Gaussians
 	float diff = blur.x - blur.y;
 	float threshold = 0.005;
 	
+	// Thresholding
 	if (diff >= threshold) {diff = 1.0;}
 	else {diff = 0.0;}
 	
 	return diff;
 }
 
-
+// Sobel filter
 float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) : SV_Target {
 	
 	float2 delta = float2(0.001, 0.001);
@@ -200,6 +220,7 @@ float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) :
 	float Gx;
 	float Gy;
 
+	// Applying Gx matrix
 	Gx += tex2D(DiffGauss, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
 	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, -1.0) * delta)).r * 0.0;
 	Gx += tex2D(DiffGauss, (texcoord + float2(1.0, -1.0) * delta)).r * 1.0;
@@ -210,6 +231,7 @@ float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) :
 	Gx += tex2D(DiffGauss, (texcoord + float2(0.0, 1.0) * delta)).r * 0.0;
 	Gx += tex2D(DiffGauss, (texcoord + float2(1.0, 1.0) * delta)).r * 1.0;
 	
+	// Applying Gy matrix
 	Gy += tex2D(DiffGauss, (texcoord + float2(-1.0, -1.0) * delta)).r * -1.0;
 	Gy += tex2D(DiffGauss, (texcoord + float2(0.0, -1.0) * delta)).r * -2.0;
 	Gy += tex2D(DiffGauss, (texcoord + float2(1.0, -1.0) * delta)).r * -1.0;
@@ -224,114 +246,129 @@ float2 sobelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0) :
 	float2 G = float2(Gx, Gy);
 	G = normalize(G);
 	
+	// Get angle
 	float theta = atan2(G.y, G.x);
 	
-	return float2(theta, 1 - isnan(theta));
+	return float2(theta, 1 - theta);
 }
 
-groupshared int edgeCount[64];
+// Stores edges for 8x8 tile
+groupshared int edges[64];
+
 // Convert to ascii
 void convertAscii(uint3 tid : SV_DISPATCHTHREADID, uint3 gid : SV_GROUPTHREADID)
 {
-
+	// Get sobel filtered image
 	float2 sobel = tex2Dfetch(Sobel, tid.xy).rg;
 
+	// Get angle
     float theta = sobel.r;
     float absTheta = abs(theta) / 3.14;
 
     int direction = -1;
 
+	// Assign direction index based on angle
     if (any(sobel.r)) {
-        if (0.0f <= absTheta && absTheta < 0.1f) direction = 1; // VERTICAL
-        else if (0.9f < absTheta && absTheta <= 1.0f) direction = 1;
-        else if (0.4f <= absTheta && absTheta <= 0.6f) direction = 0; // HORIZONTAL
-        else if (0.1f < absTheta && absTheta < 0.4f) direction = sign(theta) > 0 ? 3 : 2; // DIAGONAL 1
-        else if (0.6f < absTheta && absTheta < 0.9f) direction = sign(theta) > 0 ? 2 : 3; // DIAGONAL 2
+  	  if (0.4f <= absTheta && absTheta <= 0.6f) {direction = 0;} // Underscore      
+		else if (0.0f <= absTheta && absTheta < 0.25f || 0.75f < absTheta && absTheta <= 1.0f) {direction = 1;} // Vertical line
+        else if (0.25f < absTheta && absTheta < 0.4f) { // Diagonal
+			if (sign(theta) > 0) {direction = 3;}
+			else {direction = 2;}
+		} 
+        else if (0.6f < absTheta && absTheta < 0.75f) { // Diagonal
+			if (sign(theta) > 0) {direction = 2;}
+			else {direction = 3;}
+		} 
     }	
     
-    
-    // Set group thread bucket to direction
-    edgeCount[gid.x + gid.y * 8] = direction;
+    // Store directions for every pixel in the tile
+    edges[gid.x + gid.y * 8] = direction;
 
     barrier();
 
-    int commonEdgeIndex = -1;
-    if ((gid.x == 0) && (gid.y == 0)) {
-        uint buckets[4] = {0, 0, 0, 0};
+	// Find most common edge direction in the tile
+    int edgeIndex = -1;
+    if ((gid.x == 0) && (gid.y == 0)) { // Only perform once per tile
+  	  // Store amount of each edge direction present in the tile      
+		uint tileEdges[4] = {0, 0, 0, 0};
 
-        // Count up directions in tile
-        for (int i = 0; i < 64; ++i) {
-            buckets[edgeCount[i]] += 1;
+        // Count all edges in the tile
+        for (int i = 0; i < 64; i++) {
+            tileEdges[edges[i]] += 1;
         }
 
-        uint maxValue = 0;
+        uint maxEdge = 0;
 
-        // Scan for most common edge direction (max)
-        for (int j = 0; j < 4; ++j) {
-            if (buckets[j] > maxValue) {
-                commonEdgeIndex = j;
-                maxValue = buckets[j];
+        // Find the most common type of edge in the tile
+        for (int i = 0; i < 4; i++) {
+            if (tileEdges[i] > maxEdge) {
+                edgeIndex = i;
+                maxEdge = tileEdges[i];
             }
         }
 		
 		int edgeThreshold = 8;
 		
-        // Discard edge info if not enough edge pixels in tile
-        if (maxValue < edgeThreshold) commonEdgeIndex = -1;
+        // Only count as an edge if there are enough edges present in the tile
+        if (maxEdge < edgeThreshold) edgeIndex = -1;
 
-        edgeCount[0] = commonEdgeIndex;
+        edges[0] = edgeIndex;
     }
 
     barrier();
     
-    
-    
-    float4 quantizedEdge = (edgeCount[0] + 1) * 8;
+    // Quantize edge (in order to find right place in edge texture)
+    float4 quantizedEdge = (edges[0] + 1) * 8;
 
 	float3 ascii = 0;
 	
+	// Get color from downscaled image
 	uint2 downscaleID = tid.xy / 8;
-	float4 downscaleInfo = tex2Dfetch(Downscale, downscaleID);
+	float4 downscaleColor = tex2Dfetch(Downscale, downscaleID);
 	
-	float luminance = saturate(downscaleInfo.w);
+	// Get luminance
+	float luminance = saturate(downscaleColor.w);
+	// Quantize luminance to 10 shades
 	luminance = max(0, (floor(luminance * 10) - 1)) / 10.0f;
 	
 	float2 localUV;
 	
-	if (saturate(edgeCount[0] + 1)) {
+	if (saturate(edges[0] + 1)) { // If the tile contains an edge
 		// Edges
-		localUV.x = ((tid.x % 8)) + quantizedEdge.x;
+		localUV.x = (tid.x % 8) + quantizedEdge.x;
 		localUV.y = 8 - (tid.y % 8);
 	
 		ascii = tex2Dfetch(AsciiEdge, localUV).r;
 	}
 	else {
 		// Fill
-    	localUV.x = (((tid.x % 8)) + (luminance) * 80);
-    	localUV.y = (tid.y % 8);
+    	localUV.x = (tid.x % 8) + luminance * 80;
+    	localUV.y = tid.y % 8;
 
     	ascii = tex2Dfetch(AsciiFill, localUV).r;
 	}
     
-    
+    // Store result in texture
     tex2Dstore(AsciiStore, tid.xy, float4(ascii, 1.0));
 }
 
+// Display the ascii texture
 float4 printAscii(float4 position : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET { 
-
-	return tex2D(ASCII, uv).rgba;
+	return tex2D(ASCII, uv);
 }
 
+// Applies color palettes
 float4 colorShader(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0)  : SV_TARGET { 	
 
-	float4 ascii = tex2D(ASCII, texcoord).rgba;
-	float4 color = tex2D(Downscale, texcoord); // Quantized colors
+	float4 ascii = tex2D(ASCII, texcoord);
+	float4 color = tex2D(Downscale, texcoord);
 	
 	int numShades = 10;
 	
     float luminance = (color.r + color.g + color.b) / 3.0f;
     float quantizedLuminance = floor(luminance * numShades) / numShades;
 	
+	// Color palettes consist of black + 9 colors
 	float4 color1;
 	float4 color2;
 	float4 color3;
@@ -405,13 +442,7 @@ float4 colorShader(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0)  
 	return ascii * color;	
 }
 
-[shader("pixel")]
-void defaultPixelShader(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
-{
-	// Get original color   
-	finalColor = tex2D(samplerColor, texcoord);	
-}
-
+// Shows the different textures generated throughout the process
 [shader("pixel")]
 void viewProgress(float4 position : SV_Position, float2 texcoord : TEXCOORD0, out float4 finalColor : SV_Target) 
 {
@@ -428,8 +459,9 @@ void viewProgress(float4 position : SV_Position, float2 texcoord : TEXCOORD0, ou
 }
 
 
-technique test < ui_label = "test shader...?"; >
+technique test < ui_label = "ASCII Shader :3"; >
 {
+	// Save unmodified image
 	pass {
 		RenderTarget = OriginalTex;
 		
@@ -477,6 +509,7 @@ technique test < ui_label = "test shader...?"; >
     	PixelShader = printAscii;
     }
     
+    // Store result from ascii shader
     pass {
 		RenderTarget = ResultTex;    	
 
